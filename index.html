@@ -44,6 +44,12 @@
   </div>
 
   <div class="section">
+    <h2>Импорт из Excel</h2>
+    <input type="file" id="excelInput" accept=".xlsx, .xls">
+    <button onclick="importExcel()">Импортировать</button>
+  </div>
+
+  <div class="section">
     <h2>Список участников</h2>
     <ul id="participantList"></ul>
   </div>
@@ -58,15 +64,16 @@
     </div>
   </div>
 
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
   <script>
     const firebaseConfig = {
-      apiKey: "AIzaSyDiIjOc2nbdjqhldebc9FYD1nzgjQm2OaE",
-      authDomain: "racetimer-eb717.firebaseapp.com",
-      databaseURL: "https://racetimer-eb717-default-rtdb.firebaseio.com",
-      projectId: "racetimer-eb717",
-      storageBucket: "racetimer-eb717.firebasestorage.app",
-      messagingSenderId: "207619945096",
-      appId: "1:207619945096:web:c2e6824b97ecd50dc7a53d"
+      apiKey: "YOUR_API_KEY",
+      authDomain: "YOUR_PROJECT.firebaseapp.com",
+      databaseURL: "https://YOUR_PROJECT.firebaseio.com",
+      projectId: "YOUR_PROJECT_ID",
+      storageBucket: "YOUR_PROJECT.appspot.com",
+      messagingSenderId: "YOUR_SENDER_ID",
+      appId: "YOUR_APP_ID"
     };
     firebase.initializeApp(firebaseConfig);
     const db = firebase.database();
@@ -76,10 +83,40 @@
       list.innerHTML = "";
       db.ref("participants").orderByKey().once("value", snap => {
         const data = snap.val();
-        for (const id in data) {
+        const sortedIds = Object.keys(data || {}).sort((a, b) => +a - +b);
+        for (const id of sortedIds) {
           const p = data[id];
           const li = document.createElement("li");
           li.innerHTML = `${id}: ${p.name}, ${p.team}, ${p.category}`;
+          if (p.startTime) li.innerHTML += ` | Старт: ${p.startTime}`;
+          if (p.finishTime) li.innerHTML += ` | Финиш: ${p.finishTime}`;
+          if (p.result) li.innerHTML += ` | Результат: ${p.result}`;
+
+          const startBtn = document.createElement("button");
+          startBtn.textContent = "Старт";
+          startBtn.onclick = () => {
+            const time = new Date().toISOString();
+            db.ref("participants/" + id).update({ startTime: time });
+          };
+
+          const finishBtn = document.createElement("button");
+          finishBtn.textContent = "Финиш";
+          finishBtn.onclick = () => {
+            const time = new Date().toISOString();
+            db.ref("participants/" + id).once("value", snap => {
+              const p = snap.val();
+              const start = new Date(p.startTime).getTime();
+              const finish = new Date(time).getTime();
+              const diff = finish - start;
+              const minutes = Math.floor(diff / 60000).toString().padStart(2, '0');
+              const seconds = Math.floor((diff % 60000) / 1000).toString().padStart(2, '0');
+              const ms = (diff % 1000).toString().padStart(3, '0');
+              const result = `${minutes}:${seconds}.${ms}`;
+              db.ref("participants/" + id).update({ finishTime: time, result });
+              renderParticipants();
+            });
+          };
+
           const editBtn = document.createElement("button");
           editBtn.textContent = "✏️";
           editBtn.className = "edit";
@@ -90,6 +127,8 @@
           delBtn.className = "delete";
           delBtn.onclick = () => deleteParticipant(id);
 
+          li.appendChild(startBtn);
+          li.appendChild(finishBtn);
           li.appendChild(editBtn);
           li.appendChild(delBtn);
           list.appendChild(li);
@@ -117,6 +156,37 @@
       });
     }
 
+    function importExcel() {
+      const input = document.getElementById("excelInput");
+      const reader = new FileReader();
+      reader.onload = e => {
+        const data = new Uint8Array(e.target.result);
+        const workbook = XLSX.read(data, { type: 'array' });
+        const sheet = workbook.Sheets[workbook.SheetNames[0]];
+        const rows = XLSX.utils.sheet_to_json(sheet);
+        rows.forEach(row => {
+          const id = String(row["Номер"] || row["ID"] || row["Id"] || row["id"]);
+          const name = row["ФИО"] || row["Имя"] || row["Name"] || row["name"];
+          const team = row["Команда"] || row["Team"] || "";
+          const category = row["Категория"] || row["Category"] || "Открытая категория / Open";
+          if (id && name) {
+            db.ref("participants/" + id).once("value", snap => {
+              if (!snap.exists()) {
+                db.ref("participants/" + id).set({ name, team, category });
+              }
+            });
+          }
+        });
+        alert("Импорт завершен");
+        renderParticipants();
+      };
+      if (input.files.length) {
+        reader.readAsArrayBuffer(input.files[0]);
+      } else {
+        alert("Выберите файл Excel");
+      }
+    }
+
     function editParticipant(id) {
       const name = prompt("Введите новое имя:");
       const team = prompt("Введите новую команду:");
@@ -136,7 +206,6 @@
 
     renderParticipants();
 
-    // Live Timer Logic
     let startTime, timerInterval;
     const display = document.getElementById("liveTimerDisplay");
 
