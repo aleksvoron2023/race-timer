@@ -11,7 +11,6 @@
     .section { margin-bottom: 30px; }
     .participant-list li { margin-bottom: 10px; padding: 10px; border: 1px solid #ddd; }
     .participant-list button { margin-left: 5px; }
-    table, th, td { border: 1px solid #ccc; padding: 8px; text-align: left; }
     input, select { margin-bottom: 10px; display: block; width: 100%; padding: 6px; }
     button.edit, button.delete { margin-left: 5px; }
     #liveTimerDisplay { font-weight: bold; font-size: 1.5em; color: green; margin-top: 10px; }
@@ -19,12 +18,15 @@
     @media (max-width: 600px) {
       body { padding: 10px; }
       input, select, button { font-size: 1.2em; }
-      table, th, td { font-size: 0.9em; }
     }
   </style>
 </head>
 <body>
   <h1>Хронометраж гонки</h1>
+
+  <!-- Звуковые файлы -->
+  <audio id="startSound" src="https://cdn.pixabay.com/audio/2022/03/15/audio_9fcfa01b40.mp3" preload="auto"></audio>
+  <audio id="finishSound" src="https://cdn.pixabay.com/audio/2022/03/15/audio_c9a62a5ac2.mp3" preload="auto"></audio>
 
   <div class="section">
     <h2>Добавить участника вручную</h2>
@@ -77,6 +79,9 @@
     firebase.initializeApp(firebaseConfig);
     const db = firebase.database();
 
+    const startSound = document.getElementById("startSound");
+    const finishSound = document.getElementById("finishSound");
+
     let participantTimers = {};
 
     function formatTime(ms) {
@@ -88,6 +93,9 @@
     }
 
     function renderParticipants() {
+      for (const id in participantTimers) clearInterval(participantTimers[id]);
+      participantTimers = {};
+
       const list = document.getElementById("participantList");
       list.innerHTML = "";
       db.ref("participants").orderByKey().once("value", snap => {
@@ -97,7 +105,7 @@
           const p = data[id];
           const li = document.createElement("li");
           if (p.startTime && !p.finishTime) {
-            li.style.backgroundColor = "#fff5cc"; // активный участник
+            li.style.backgroundColor = "#fff5cc";
           }
 
           li.innerHTML = `<strong>${id}</strong>: ${p.name}, ${p.team}, ${p.category}`;
@@ -127,7 +135,7 @@
           startBtn.onclick = () => {
             const time = new Date().toISOString();
             db.ref("participants/" + id).update({ startTime: time });
-            renderParticipants();
+            startSound.play();
           };
 
           const finishBtn = document.createElement("button");
@@ -142,8 +150,7 @@
               const diff = finish - start;
               const result = formatTime(diff);
               db.ref("participants/" + id).update({ finishTime: time, result });
-              clearInterval(participantTimers[id]);
-              renderParticipants();
+              finishSound.play();
             });
           };
 
@@ -166,6 +173,10 @@
       });
     }
 
+    db.ref("participants").on("value", () => {
+      renderParticipants();
+    });
+
     function addManualParticipant() {
       const id = document.getElementById("manualId").value.trim();
       const name = document.getElementById("manualName").value.trim();
@@ -182,7 +193,6 @@
         document.getElementById("manualId").value = "";
         document.getElementById("manualName").value = "";
         document.getElementById("manualTeam").value = "";
-        renderParticipants();
       });
     }
 
@@ -208,7 +218,6 @@
           }
         });
         alert("Импорт завершен");
-        renderParticipants();
       };
       if (input.files.length) {
         reader.readAsArrayBuffer(input.files[0]);
@@ -223,7 +232,6 @@
       const category = prompt("Введите новую категорию:");
       if (name && category) {
         db.ref("participants/" + id).update({ name, team, category });
-        renderParticipants();
       }
     }
 
@@ -231,11 +239,8 @@
       if (confirm("Удалить участника?")) {
         db.ref("participants/" + id).remove();
         clearInterval(participantTimers[id]);
-        renderParticipants();
       }
     }
-
-    renderParticipants();
 
     let startTime, timerInterval;
     const display = document.getElementById("liveTimerDisplay");
