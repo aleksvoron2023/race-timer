@@ -2,19 +2,22 @@
 <html lang="ru">
 <head>
   <meta charset="UTF-8">
-  <title>Секундомер</title>
+  <title>Секундомер для заездов</title>
   <script src="https://www.gstatic.com/firebasejs/10.11.0/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.11.0/firebase-database-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.11.0/firebase-auth-compat.js"></script>
   <style>
-    body { font-family: sans-serif; padding: 20px; }
-    .timer { font-size: 2em; margin: 20px 0; }
-    input, button { font-size: 1em; padding: 10px; margin: 5px; }
+    body { font-family: sans-serif; padding: 20px; background: #f2f2f2; }
+    input, button, select { font-size: 1em; padding: 8px; margin: 5px; }
+    .timer { font-size: 2em; margin: 10px 0; }
+    table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+    th, td { padding: 8px; border: 1px solid #ccc; text-align: center; }
+    th { background-color: #eee; }
   </style>
 </head>
 <body>
 
-<h2>Секундомер Firebase</h2>
+<h2>Секундомер для заездов (точность до тысячных)</h2>
 
 <label>Номер участника:</label><br/>
 <input id="riderId" placeholder="например, 101"><br/>
@@ -24,8 +27,22 @@
 
 <div class="timer" id="timer">00:00.000</div>
 
+<h3>Результаты</h3>
+<table id="results">
+  <thead>
+    <tr>
+      <th>Номер</th>
+      <th>Старт</th>
+      <th>Финиш</th>
+      <th>Время</th>
+    </tr>
+  </thead>
+  <tbody></tbody>
+</table>
+
+<button onclick="downloadCSV()">📄 Скачать CSV</button>
+
 <script>
-  // 🔧 Вставь сюда свой firebaseConfig:
   const firebaseConfig = {
     apiKey: "API_KEY",
     authDomain: "PROJECT_ID.firebaseapp.com",
@@ -38,8 +55,9 @@
 
   firebase.initializeApp(firebaseConfig);
   const db = firebase.database();
-
   firebase.auth().signInAnonymously();
+
+  let interval = null;
 
   function getCurrentTimeMs() {
     return Date.now();
@@ -58,9 +76,16 @@
 
     const timestamp = getCurrentTimeMs();
 
-    db.ref("races/" + rider).set({ start: timestamp });
-
-    document.getElementById("timer").textContent = "СТАРТ: " + new Date(timestamp).toLocaleTimeString();
+    db.ref("races/" + rider).set({ start: timestamp }).then(() => {
+      document.getElementById("timer").textContent = "СТАРТ: " + new Date(timestamp).toLocaleTimeString();
+      // Показать живое время
+      if (interval) clearInterval(interval);
+      interval = setInterval(() => {
+        const now = Date.now();
+        const duration = now - timestamp;
+        document.getElementById("timer").textContent = "ВРЕМЯ: " + formatDuration(duration);
+      }, 50);
+    });
   }
 
   function finishRace() {
@@ -70,18 +95,71 @@
     const timestamp = getCurrentTimeMs();
 
     const raceRef = db.ref("races/" + rider);
-
-    raceRef.once("value", snap => {
+    raceRef.once("value").then(snap => {
       const data = snap.val();
       if (!data || !data.start) {
         document.getElementById("timer").textContent = "Ошибка: старт не найден";
         return;
       }
-
-      raceRef.update({ finish: timestamp });
-
+      if (data.finish) {
+        document.getElementById("timer").textContent = "Участник уже финишировал";
+        return;
+      }
       const duration = timestamp - data.start;
-      document.getElementById("timer").textContent = "ВРЕМЯ: " + formatDuration(duration);
+      raceRef.update({
+        finish: timestamp,
+        duration: duration
+      });
+      document.getElementById("timer").textContent = "ИТОГО: " + formatDuration(duration);
+      if (interval) clearInterval(interval);
+    });
+  }
+
+  // Рендерим таблицу
+  function renderResults(snapshot) {
+    const tbody = document.querySelector("#results tbody");
+    tbody.innerHTML = "";
+    const data = snapshot.val();
+    if (!data) return;
+
+    Object.keys(data).forEach(riderId => {
+      const item = data[riderId];
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td>${riderId}</td>
+        <td>${item.start ? new Date(item.start).toLocaleTimeString() : ""}</td>
+        <td>${item.finish ? new Date(item.finish).toLocaleTimeString() : ""}</td>
+        <td>${item.duration ? formatDuration(item.duration) : ""}</td>
+      `;
+      tbody.appendChild(tr);
+    });
+  }
+
+  // Подписка на обновления
+  db.ref("races").on("value", renderResults);
+
+  // Экспорт в CSV
+  function downloadCSV() {
+    const rows = [["Номер", "Старт", "Финиш", "Время"]];
+    db.ref("races").once("value").then(snapshot => {
+      const data = snapshot.val();
+      if (!data) return;
+      Object.keys(data).forEach(riderId => {
+        const r = data[riderId];
+        rows.push([
+          riderId,
+          r.start ? new Date(r.start).toLocaleTimeString() : "",
+          r.finish ? new Date(r.finish).toLocaleTimeString() : "",
+          r.duration ? formatDuration(r.duration) : ""
+        ]);
+      });
+      const csvContent = rows.map(e => e.join(",")).join("\n");
+      const blob = new Blob([csvContent], { type: "text/csv" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "results.csv";
+      a.click();
     });
   }
 </script>
