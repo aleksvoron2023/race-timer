@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <title>Секундомер</title>
+  <script src="https://www.gstatic.com/firebasejs/10.11.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.11.0/firebase-database-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.11.0/firebase-auth-compat.js"></script>
+  <style>
+    body { font-family: sans-serif; padding: 20px; }
+    .timer { font-size: 2em; margin: 20px 0; }
+    input, button { font-size: 1em; padding: 10px; margin: 5px; }
+  </style>
+</head>
+<body>
+
+<h2>Секундомер Firebase</h2>
+
+<label>Номер участника:</label><br/>
+<input id="riderId" placeholder="например, 101"><br/>
+
+<button onclick="startRace()">СТАРТ</button>
+<button onclick="finishRace()">ФИНИШ</button>
+
+<div class="timer" id="timer">00:00.000</div>
+
+<script>
+  // 🔧 Вставь сюда свой firebaseConfig:
+  const firebaseConfig = {
+    apiKey: "API_KEY",
+    authDomain: "PROJECT_ID.firebaseapp.com",
+    databaseURL: "https://PROJECT_ID.firebaseio.com",
+    projectId: "PROJECT_ID",
+    storageBucket: "PROJECT_ID.appspot.com",
+    messagingSenderId: "SENDER_ID",
+    appId: "APP_ID"
+  };
+
+  firebase.initializeApp(firebaseConfig);
+  const db = firebase.database();
+
+  firebase.auth().signInAnonymously();
+
+  function getCurrentTimeMs() {
+    return Date.now();
+  }
+
+  function formatDuration(ms) {
+    const min = String(Math.floor(ms / 60000)).padStart(2, '0');
+    const sec = String(Math.floor((ms % 60000) / 1000)).padStart(2, '0');
+    const mil = String(ms % 1000).padStart(3, '0');
+    return `${min}:${sec}.${mil}`;
+  }
+
+  function startRace() {
+    const rider = document.getElementById("riderId").value.trim();
+    if (!rider) return alert("Введите номер участника");
+
+    const timestamp = getCurrentTimeMs();
+
+    db.ref("races/" + rider).set({ start: timestamp });
+
+    document.getElementById("timer").textContent = "СТАРТ: " + new Date(timestamp).toLocaleTimeString();
+  }
+
+  function finishRace() {
+    const rider = document.getElementById("riderId").value.trim();
+    if (!rider) return alert("Введите номер участника");
+
+    const timestamp = getCurrentTimeMs();
+
+    const raceRef = db.ref("races/" + rider);
+
+    raceRef.once("value", snap => {
+      const data = snap.val();
+      if (!data || !data.start) {
+        document.getElementById("timer").textContent = "Ошибка: старт не найден";
+        return;
+      }
+
+      raceRef.update({ finish: timestamp });
+
+      const duration = timestamp - data.start;
+      document.getElementById("timer").textContent = "ВРЕМЯ: " + formatDuration(duration);
+    });
+  }
+</script>
+
+</body>
+</html>
