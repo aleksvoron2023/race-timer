@@ -1,45 +1,71 @@
 <!DOCTYPE html>
 <html lang="ru">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Секундомер гонки - синхронизация</title>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Секундомер гонки</title>
   <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
   <style>
     body { font-family: sans-serif; padding: 20px; }
+    .section { margin-bottom: 30px; }
+    .participant-list button { margin-left: 10px; }
     table { border-collapse: collapse; width: 100%; }
-    th, td { border: 1px solid #ccc; padding: 8px; text-align: left; }
-    button { margin: 0 4px; }
+    table, th, td { border: 1px solid #ccc; padding: 8px; text-align: left; }
+    textarea { width: 100%; height: 150px; }
+    input, select { margin-bottom: 10px; display: block; width: 100%; padding: 6px; }
+    button.edit, button.delete { margin-left: 5px; }
     #liveTimerDisplay { font-weight: bold; font-size: 1.5em; color: green; margin-top: 10px; }
+    .live-controls { margin-top: 10px; }
     @media (max-width: 600px) {
       body { padding: 10px; }
-      table, th, td, button { font-size: 0.9em; }
+      input, select, button { font-size: 1.2em; }
+      table, th, td { font-size: 0.9em; }
     }
   </style>
 </head>
 <body>
-  <h1>Секундомер гонки с синхронизацией</h1>
-  <table id="participantsTable">
-    <thead>
-      <tr>
-        <th>Номер</th>
-        <th>ФИО</th>
-        <th>Команда</th>
-        <th>Категория</th>
-        <th>Старт</th>
-        <th>Финиш</th>
-        <th>Результат</th>
-        <th>Действия</th>
-      </tr>
-    </thead>
-    <tbody></tbody>
-  </table>
+  <h1>Хронометраж гонки</h1>
 
-  <div id="liveTimerDisplay">00:00.000</div>
+  <div class="section">
+    <h2>Добавить участника вручную</h2>
+    <input type="text" id="manualId" placeholder="Номер участника">
+    <input type="text" id="manualName" placeholder="ФИО участника">
+    <input type="text" id="manualTeam" placeholder="Команда">
+    <select id="manualCategory">
+      <option>Мастера Мужчины / Men Master</option>
+      <option>Элита Мужчины / Man Elite</option>
+      <option>Юниоры / Junior</option>
+      <option>Женщины / Women</option>
+      <option>Открытая категория / Open</option>
+      <option>Електро-маунтинбайки / E-mtb</option>
+    </select>
+    <button onclick="addManualParticipant()">Добавить участника</button>
+  </div>
 
+  <div class="section">
+    <h2>Импорт из Excel</h2>
+    <input type="file" id="excelInput" accept=".xlsx, .xls">
+    <button onclick="importExcel()">Импортировать</button>
+  </div>
+
+  <div class="section">
+    <h2>Список участников</h2>
+    <ul id="participantList"></ul>
+  </div>
+
+  <div class="section">
+    <h2>Live-секундомер</h2>
+    <div id="liveTimerDisplay">00:00.000</div>
+    <div class="live-controls">
+      <button onclick="startLiveTimer()">Старт</button>
+      <button onclick="stopLiveTimer()">Финиш</button>
+      <button onclick="resetLiveTimer()">Сброс</button>
+    </div>
+  </div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
   <script>
-    // Вставь сюда свои настройки Firebase:
     const firebaseConfig = {
       apiKey: "AIzaSyDiIjOc2nbdjqhldebc9FYD1nzgjQm2OaE",
       authDomain: "racetimer-eb717.firebaseapp.com",
@@ -52,16 +78,137 @@
     firebase.initializeApp(firebaseConfig);
     const db = firebase.database();
 
-    // Переменные для секундомера
-    let timerInterval = null;
-    let startTimestamp = null; // время старта в ms
-    let elapsedBeforePause = 0;
-    let isRunning = false;
+    function renderParticipants() {
+      const list = document.getElementById("participantList");
+      list.innerHTML = "";
+      db.ref("participants").orderByKey().once("value", snap => {
+        const data = snap.val();
+        const sortedIds = Object.keys(data || {}).sort((a, b) => +a - +b);
+        for (const id of sortedIds) {
+          const p = data[id];
+          const li = document.createElement("li");
+          li.innerHTML = `${id}: ${p.name}, ${p.team}, ${p.category}`;
+          if (p.startTime) li.innerHTML += ` | Старт: ${p.startTime}`;
+          if (p.finishTime) li.innerHTML += ` | Финиш: ${p.finishTime}`;
+          if (p.result) li.innerHTML += ` | Результат: ${p.result}`;
 
-    const liveTimerDisplay = document.getElementById('liveTimerDisplay');
-    const tbody = document.querySelector('#participantsTable tbody');
+          const startBtn = document.createElement("button");
+          startBtn.textContent = "Старт";
+          startBtn.onclick = () => {
+            const time = new Date().toISOString();
+            db.ref("participants/" + id).update({ startTime: time });
+          };
 
-    // Форматирование времени в mm:ss.mmm
+          const finishBtn = document.createElement("button");
+          finishBtn.textContent = "Финиш";
+          finishBtn.onclick = () => {
+            const time = new Date().toISOString();
+            db.ref("participants/" + id).once("value", snap => {
+              const p = snap.val();
+              const start = new Date(p.startTime).getTime();
+              const finish = new Date(time).getTime();
+              const diff = finish - start;
+              const minutes = Math.floor(diff / 60000).toString().padStart(2, '0');
+              const seconds = Math.floor((diff % 60000) / 1000).toString().padStart(2, '0');
+              const ms = (diff % 1000).toString().padStart(3, '0');
+              const result = `${minutes}:${seconds}.${ms}`;
+              db.ref("participants/" + id).update({ finishTime: time, result });
+              renderParticipants();
+            });
+          };
+
+          const editBtn = document.createElement("button");
+          editBtn.textContent = "✏️";
+          editBtn.className = "edit";
+          editBtn.onclick = () => editParticipant(id);
+
+          const delBtn = document.createElement("button");
+          delBtn.textContent = "🗑️";
+          delBtn.className = "delete";
+          delBtn.onclick = () => deleteParticipant(id);
+
+          li.appendChild(startBtn);
+          li.appendChild(finishBtn);
+          li.appendChild(editBtn);
+          li.appendChild(delBtn);
+          list.appendChild(li);
+        }
+      });
+    }
+
+    function addManualParticipant() {
+      const id = document.getElementById("manualId").value.trim();
+      const name = document.getElementById("manualName").value.trim();
+      const team = document.getElementById("manualTeam").value.trim();
+      const category = document.getElementById("manualCategory").value;
+      if (!id || !name) return alert("Введите номер и имя участника");
+
+      db.ref("participants/" + id).once("value", snap => {
+        if (snap.exists()) {
+          return alert("Участник с таким номером уже существует");
+        }
+        db.ref("participants/" + id).set({ name, team, category });
+        alert("Участник добавлен!");
+        document.getElementById("manualId").value = "";
+        document.getElementById("manualName").value = "";
+        document.getElementById("manualTeam").value = "";
+        renderParticipants();
+      });
+    }
+
+    function importExcel() {
+      const input = document.getElementById("excelInput");
+      const reader = new FileReader();
+      reader.onload = e => {
+        const data = new Uint8Array(e.target.result);
+        const workbook = XLSX.read(data, { type: 'array' });
+        const sheet = workbook.Sheets[workbook.SheetNames[0]];
+        const rows = XLSX.utils.sheet_to_json(sheet);
+        rows.forEach(row => {
+          const id = String(row["Номер"] || row["ID"] || row["Id"] || row["id"]);
+          const name = row["ФИО"] || row["Имя"] || row["Name"] || row["name"];
+          const team = row["Команда"] || row["Team"] || "";
+          const category = row["Категория"] || row["Category"] || "Открытая категория / Open";
+          if (id && name) {
+            db.ref("participants/" + id).once("value", snap => {
+              if (!snap.exists()) {
+                db.ref("participants/" + id).set({ name, team, category });
+              }
+            });
+          }
+        });
+        alert("Импорт завершен");
+        renderParticipants();
+      };
+      if (input.files.length) {
+        reader.readAsArrayBuffer(input.files[0]);
+      } else {
+        alert("Выберите файл Excel");
+      }
+    }
+
+    function editParticipant(id) {
+      const name = prompt("Введите новое имя:");
+      const team = prompt("Введите новую команду:");
+      const category = prompt("Введите новую категорию:");
+      if (name && category) {
+        db.ref("participants/" + id).update({ name, team, category });
+        renderParticipants();
+      }
+    }
+
+    function deleteParticipant(id) {
+      if (confirm("Удалить участника?")) {
+        db.ref("participants/" + id).remove();
+        renderParticipants();
+      }
+    }
+
+    renderParticipants();
+
+    let startTime, timerInterval;
+    const display = document.getElementById("liveTimerDisplay");
+
     function formatTime(ms) {
       const totalSeconds = Math.floor(ms / 1000);
       const minutes = Math.floor(totalSeconds / 60).toString().padStart(2, '0');
@@ -70,132 +217,23 @@
       return `${minutes}:${seconds}.${milliseconds}`;
     }
 
-    // Обновление дисплея с учётом текущего времени
-    function updateDisplay() {
-      if (!startTimestamp) {
-        liveTimerDisplay.textContent = formatTime(elapsedBeforePause);
-        return;
-      }
-      const now = Date.now();
-      const elapsed = elapsedBeforePause + (isRunning ? (now - startTimestamp) : 0);
-      liveTimerDisplay.textContent = formatTime(elapsed);
+    function startLiveTimer() {
+      startTime = Date.now();
+      clearInterval(timerInterval);
+      timerInterval = setInterval(() => {
+        const elapsed = Date.now() - startTime;
+        display.textContent = formatTime(elapsed);
+      }, 10);
     }
 
-    // Запуск локального интервала обновления
-    function startInterval() {
-      if (timerInterval) clearInterval(timerInterval);
-      timerInterval = setInterval(updateDisplay, 10);
+    function stopLiveTimer() {
+      clearInterval(timerInterval);
     }
 
-    // Остановка локального интервала
-    function stopInterval() {
-      if (timerInterval) {
-        clearInterval(timerInterval);
-        timerInterval = null;
-      }
+    function resetLiveTimer() {
+      clearInterval(timerInterval);
+      display.textContent = "00:00.000";
     }
-
-    // Загрузка участников из Firebase и отображение
-    function loadParticipants() {
-      db.ref('participants').once('value', snap => {
-        const data = snap.val() || {};
-        // Сортируем по номеру участника
-        const sortedIds = Object.keys(data).sort((a,b) => +a - +b);
-        tbody.innerHTML = '';
-        for (const id of sortedIds) {
-          const p = data[id];
-          const tr = document.createElement('tr');
-          tr.innerHTML = `
-            <td>${id}</td>
-            <td>${p.name || ''}</td>
-            <td>${p.team || ''}</td>
-            <td>${p.category || ''}</td>
-            <td>${p.startTime ? new Date(p.startTime).toLocaleTimeString('ru-RU', {hour12:false}) : ''}</td>
-            <td>${p.finishTime ? new Date(p.finishTime).toLocaleTimeString('ru-RU', {hour12:false}) : ''}</td>
-            <td>${p.result || ''}</td>
-            <td>
-              <button class="start-btn">Старт</button>
-              <button class="finish-btn">Финиш</button>
-            </td>
-          `;
-          tbody.appendChild(tr);
-
-          // Кнопка Старт
-          tr.querySelector('.start-btn').onclick = () => {
-            // Запишем старт участника
-            const nowISO = new Date().toISOString();
-            db.ref(`participants/${id}`).update({ startTime: nowISO, finishTime: null, result: null });
-
-            // Запишем в общий liveTimer
-            const nowMs = Date.now();
-            db.ref('liveTimer').set({
-              isRunning: true,
-              startTimestamp: nowMs,
-              elapsedBeforePause: 0,
-              activeParticipant: id
-            });
-          };
-
-          // Кнопка Финиш
-          tr.querySelector('.finish-btn').onclick = () => {
-            db.ref(`participants/${id}`).once('value', snap => {
-              const p = snap.val();
-              if (!p.startTime) {
-                alert('Сначала нажмите старт у этого участника!');
-                return;
-              }
-              const finishISO = new Date().toISOString();
-              const startMs = new Date(p.startTime).getTime();
-              const finishMs = Date.now();
-              const diffMs = finishMs - startMs;
-              const resultStr = formatTime(diffMs);
-
-              // Обновляем участника
-              db.ref(`participants/${id}`).update({
-                finishTime: finishISO,
-                result: resultStr
-              });
-
-              // Обновляем liveTimer - останавливаем
-              db.ref('liveTimer').set({
-                isRunning: false,
-                startTimestamp: null,
-                elapsedBeforePause: diffMs,
-                activeParticipant: null
-              });
-            });
-          };
-        }
-      });
-    }
-
-    // Следим за состоянием liveTimer из Firebase и обновляем локально
-    db.ref('liveTimer').on('value', snap => {
-      const data = snap.val();
-      if (!data) {
-        // Если данных нет, сбрасываем таймер
-        isRunning = false;
-        startTimestamp = null;
-        elapsedBeforePause = 0;
-        stopInterval();
-        liveTimerDisplay.textContent = '00:00.000';
-        return;
-      }
-      isRunning = data.isRunning || false;
-      startTimestamp = data.startTimestamp || null;
-      elapsedBeforePause = data.elapsedBeforePause || 0;
-      updateDisplay();
-
-      if (isRunning) {
-        startInterval();
-      } else {
-        stopInterval();
-      }
-    });
-
-    // Загружаем участников при старте
-    loadParticipants();
-
   </script>
 </body>
 </html>
